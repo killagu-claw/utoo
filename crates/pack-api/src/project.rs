@@ -6,12 +6,12 @@ use pack_core::{
     config::{Config, ModuleIds as ModuleIdStrategyConfig},
     emit_assets,
     mode::Mode,
-    util::{Runtime, convert_to_project_relative},
+    util::{Runtime, convert_to_project_relative, strip_leading_separator, to_unix_path},
 };
 use serde::Deserialize;
 use std::{
     fs,
-    path::{MAIN_SEPARATOR, Path, PathBuf},
+    path::{Path, PathBuf},
     time::Duration,
 };
 use tracing::Instrument;
@@ -25,7 +25,7 @@ use turbo_tasks_fs::{
     DirectoryContent, DirectoryEntry, DiskFileSystem, FileContent, FileSystem, FileSystemEntryType,
     FileSystemPath, VirtualFileSystem, invalidation,
 };
-use turbo_unix_path::normalize_path;
+use turbo_unix_path::{join_path, normalize_path, unix_to_sys};
 use turbopack::global_module_ids::get_global_module_id_strategy;
 use turbopack_core::{
     file_source::FileSource,
@@ -584,7 +584,7 @@ impl Project {
 
         if self.pack_path.starts_with(&*self.root_path) {
             let relative_pack_path = self.pack_path.strip_prefix(&*self.root_path).unwrap();
-            let relative_pack_path = relative_pack_path.trim_start_matches(MAIN_SEPARATOR);
+            let relative_pack_path = strip_leading_separator(relative_pack_path);
             let turbopack_path = Path::new(relative_pack_path).join(".turbopack");
             if let Some(path_str) = turbopack_path.to_str() {
                 let turbopack_path_normalized =
@@ -620,6 +620,24 @@ impl Project {
     }
 
     #[turbo_tasks::function]
+    pub async fn dist_dir_absolute(self: Vc<Self>) -> Result<Vc<RcStr>> {
+        let this = self.await?;
+        let dist_dir = self.dist_dir().await?;
+        Ok(Vc::cell(
+            format!(
+                "{}{}{}",
+                this.root_path,
+                std::path::MAIN_SEPARATOR,
+                unix_to_sys(
+                    &join_path(&this.project_path, dist_dir.as_str())
+                        .context("expected project_path to be inside of root_path")?
+                )
+            )
+            .into(),
+        ))
+    }
+
+    #[turbo_tasks::function]
     pub async fn project_root(self: Vc<Self>) -> Result<Vc<FileSystemPath>> {
         Ok(self.project_fs(self.dist_dir()).root())
     }
@@ -635,10 +653,14 @@ impl Project {
             .clone()
             .unwrap_or("dist".into());
 
-        let relative_dist_path = convert_to_project_relative(&dist_path, &this.project_path)?;
-        let relative_dist_path = relative_dist_path
+        let mut relative_dist_path = convert_to_project_relative(&dist_path, &this.project_path)?;
+        // Strip "./" or ".\" prefix before converting to unix path (Windows compatibility)
+        relative_dist_path = relative_dist_path
             .strip_prefix("./")
-            .unwrap_or(&relative_dist_path);
+            .or_else(|| relative_dist_path.strip_prefix(".\\"))
+            .unwrap_or(&relative_dist_path)
+            .into();
+        let relative_dist_path = to_unix_path(&relative_dist_path);
 
         Ok(Vc::cell(relative_dist_path.into()))
     }
@@ -651,10 +673,7 @@ impl Project {
         } else {
             "./"
         };
-        let pack_relative = pack_relative
-            .strip_prefix(MAIN_SEPARATOR)
-            .unwrap_or(pack_relative)
-            .replace(MAIN_SEPARATOR, "/");
+        let pack_relative = to_unix_path(strip_leading_separator(pack_relative));
 
         Ok(self
             .output_fs()
@@ -671,10 +690,7 @@ impl Project {
         let dist_dir = self.dist_dir().await?;
 
         let project_relative = this.project_path.strip_prefix(&*this.root_path).unwrap();
-        let project_relative = project_relative
-            .strip_prefix(MAIN_SEPARATOR)
-            .unwrap_or(project_relative)
-            .replace(MAIN_SEPARATOR, "/");
+        let project_relative = to_unix_path(strip_leading_separator(project_relative));
 
         Ok(self
             .output_fs()
@@ -705,10 +721,7 @@ impl Project {
         let this = self.await?;
         let root = self.project_root().await?;
         let project_relative = this.project_path.strip_prefix(&*this.root_path).unwrap();
-        let project_relative = project_relative
-            .strip_prefix(MAIN_SEPARATOR)
-            .unwrap_or(project_relative)
-            .replace(MAIN_SEPARATOR, "/");
+        let project_relative = to_unix_path(strip_leading_separator(project_relative));
         Ok(root.join(&project_relative)?.cell())
     }
 
