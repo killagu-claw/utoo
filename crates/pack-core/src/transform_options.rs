@@ -115,7 +115,6 @@ pub async fn get_decorators_transform_options(
 #[turbo_tasks::function]
 pub async fn get_jsx_transform_options(
     mode: Vc<Mode>,
-    is_rsc_context: bool,
     config: Vc<Config>,
     enable_react_refresh: bool,
 ) -> Result<Vc<JsxTransformOptions>> {
@@ -124,13 +123,14 @@ pub async fn get_jsx_transform_options(
 
     let react_transform_options = JsxTransformOptions {
         development: mode.await?.is_react_development(),
-        import_source: react_config.import_source.clone().or(
-            if is_emotion_enabled && !is_rsc_context {
+        import_source: react_config
+            .import_source
+            .clone()
+            .or(if is_emotion_enabled {
                 Some("@emotion/react".into())
             } else {
                 Some("react".into())
-            },
-        ),
+            }),
         runtime: react_config
             .runtime
             .as_ref()
@@ -138,6 +138,8 @@ pub async fn get_jsx_transform_options(
             .or(Some("automatic".into())),
         react_refresh: enable_react_refresh,
     };
+
+    dbg!(&react_transform_options);
 
     Ok(react_transform_options.cell())
 }
