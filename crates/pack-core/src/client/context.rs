@@ -279,7 +279,6 @@ pub async fn get_client_module_options_context(
         false
     };
     let jsx_transform_options = get_jsx_transform_options(
-        project_path.clone(),
         mode,
         false,
         config,
